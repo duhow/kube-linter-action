@@ -42,7 +42,7 @@ runs:
           VERSION="${{ inputs.version }}"
         else
           AUTH_HEADER=""
-          if [[ -n "${{ inputs.token }}" ]]; then
+          if [[ "${{ inputs.token }}" != "" ]]; then
             AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
           fi
           RELEASE_INFO="$(curl --silent --show-error --fail \
@@ -72,16 +72,12 @@ runs:
           *)       OS=linux ;;
         esac
         INSTALL_DIR="${{ steps.resolve-version.outputs.install-dir }}"
-        # Skip if binary was already installed, e.g. when the action is used multiple times in the same job.
-        if [[ -d "${INSTALL_DIR}" ]]; then
-          exit 0
-        fi
         # Although releases endpoint is available without authentication, the current github.token is still passed
         # in order to increase the limit of 60 requests per hour per IP address to a higher value that's also counted
         # per GitHub account.
         # Caching is disabled in order not to receive stale responses from Varnish cache fronting GitHub API.
         AUTH_HEADER=""
-        if [[ -n "${{ inputs.token }}" ]]; then
+        if [[ "${{ inputs.token }}" != "" ]]; then
           AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
         fi
         RELEASE_INFO="$(curl --silent --show-error --fail \

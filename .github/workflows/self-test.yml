@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           # Ensure the action did not leave kube-linter binary or archive files in the working directory
-          DIRTY=$(git status --short | grep -E '^\?\?.*kube-linter' || true)
+          DIRTY=$(find . -maxdepth 1 \( -name 'kube-linter' -o -name 'kube-linter.exe' -o -name 'kube-linter-*.tar.gz' \) 2>/dev/null || true)
           if [[ -n "$DIRTY" ]]; then
             echo "Unexpected kube-linter files found in working directory after action run:"
             echo "$DIRTY"

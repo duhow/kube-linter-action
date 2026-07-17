@@ -33,7 +33,34 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Resolve kube-linter version
+      id: resolve-version
+      shell: bash
+      run: |
+        set -u
+        if [[ "${{ inputs.version }}" != "latest" ]]; then
+          echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        AUTH_HEADER=""
+        if [[ "${{ inputs.token }}" != "" ]]; then
+          AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
+        fi
+        RELEASE_INFO="$(curl --silent --show-error --fail \
+          --header "$AUTH_HEADER" \
+          --header 'Cache-Control: no-cache, must-revalidate' \
+          'https://api.github.com/repos/stackrox/kube-linter/releases/latest')"
+        echo "version=$(echo "${RELEASE_INFO}" | jq --raw-output ".tag_name")" >> "$GITHUB_OUTPUT"
+
+    - name: Restore kube-linter from cache
+      id: cache-kube-linter
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/kube-linter/${{ steps.resolve-version.outputs.version }}
+        key: kube-linter-${{ runner.os }}-${{ steps.resolve-version.outputs.version }}
+
     - name: Download kube-linter
+      if: steps.cache-kube-linter.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -u
@@ -42,9 +69,11 @@ runs:
           Windows) OS=windows ;;
           *)       OS=linux ;;
         esac
-        RELEASE_URL='https://api.github.com/repos/stackrox/kube-linter/releases/latest'
-        if [[ "${{ inputs.version }}" != "latest" ]]; then
-          RELEASE_URL='https://api.github.com/repos/stackrox/kube-linter/releases/tags/${{ inputs.version }}'
+        VERSION="${{ steps.resolve-version.outputs.version }}"
+        INSTALL_DIR="$RUNNER_TOOL_CACHE/kube-linter/${VERSION}"
+        # Skip if binary was already installed, e.g. when the action is used multiple times in the same job.
+        if [[ -d "${INSTALL_DIR}" ]]; then
+          exit 0
         fi
         # Although releases endpoint is available without authentication, the current github.token is still passed
         # in order to increase the limit of 60 requests per hour per IP address to a higher value that's also counted
@@ -57,17 +86,18 @@ runs:
         RELEASE_INFO="$(curl --silent --show-error --fail \
           --header "$AUTH_HEADER" \
           --header 'Cache-Control: no-cache, must-revalidate' \
-          "${RELEASE_URL}")"
-        RELEASE_NAME="$(echo "${RELEASE_INFO}" | jq --raw-output ".name")"
+          "https://api.github.com/repos/stackrox/kube-linter/releases/tags/${VERSION}")"
         LOCATION="$(echo "${RELEASE_INFO}" \
           | jq --raw-output ".assets[].browser_download_url" \
           | grep --fixed-strings "kube-linter-${OS}.tar.gz")"
-        TARGET="kube-linter-${OS}-${RELEASE_NAME}.tar.gz"
-        # Skip downloading release if downloaded already, e.g. when the action is used multiple times.
-        if [[ ! -e "$TARGET" ]]; then
-          curl --silent --show-error --fail --location --output "$TARGET" "$LOCATION"
-          tar -xf "$TARGET"
-        fi
+        mkdir -p "${INSTALL_DIR}"
+        curl --silent --show-error --fail --location --output /tmp/kube-linter.tar.gz "$LOCATION"
+        tar -xf /tmp/kube-linter.tar.gz -C "${INSTALL_DIR}"
+
+    - name: Add kube-linter to PATH
+      shell: bash
+      run: echo "$RUNNER_TOOL_CACHE/kube-linter/${{ steps.resolve-version.outputs.version }}" >> "$GITHUB_PATH"
+
     - name: Lint files
       shell: bash
       run: |
@@ -84,4 +114,4 @@ runs:
           FLAG_ARGS=""
         fi
 
-        ./kube-linter $CONFIG lint "${{ inputs.directory }}" --format "${{ inputs.format }}" $FLAG_ARGS | tee "${{ inputs.output-file }}"
+        kube-linter $CONFIG lint "${{ inputs.directory }}" --format "${{ inputs.format }}" $FLAG_ARGS | tee "${{ inputs.output-file }}"

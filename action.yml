@@ -33,24 +33,28 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Fetch latest kube-linter version
+      id: fetch-latest-version
+      if: ${{ inputs.version == 'latest' }}
+      shell: bash
+      run: |
+        set -u
+        AUTH_HEADER=""
+        if [[ -n "${{ inputs.token }}" ]]; then
+          AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
+        fi
+        RELEASE_INFO="$(curl --silent --show-error --fail \
+          --header "$AUTH_HEADER" \
+          --header 'Cache-Control: no-cache, must-revalidate' \
+          'https://api.github.com/repos/stackrox/kube-linter/releases/latest')"
+        echo "version=$(echo "${RELEASE_INFO}" | jq --raw-output ".tag_name")" >> "$GITHUB_OUTPUT"
+
     - name: Resolve kube-linter version
       id: resolve-version
       shell: bash
       run: |
         set -u
-        if [[ "${{ inputs.version }}" != "latest" ]]; then
-          VERSION="${{ inputs.version }}"
-        else
-          AUTH_HEADER=""
-          if [[ -n "${{ inputs.token }}" ]]; then
-            AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
-          fi
-          RELEASE_INFO="$(curl --silent --show-error --fail \
-            --header "$AUTH_HEADER" \
-            --header 'Cache-Control: no-cache, must-revalidate' \
-            'https://api.github.com/repos/stackrox/kube-linter/releases/latest')"
-          VERSION="$(echo "${RELEASE_INFO}" | jq --raw-output ".tag_name")"
-        fi
+        VERSION="${{ steps.fetch-latest-version.outputs.version || inputs.version }}"
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "install-dir=$RUNNER_TOOL_CACHE/kube-linter/${VERSION}" >> "$GITHUB_OUTPUT"
 

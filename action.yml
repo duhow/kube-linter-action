@@ -33,7 +33,40 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Fetch latest kube-linter version
+      id: fetch-latest-version
+      if: ${{ inputs.version == 'latest' }}
+      shell: bash
+      run: |
+        set -u
+        AUTH_HEADER=""
+        if [[ -n "${{ inputs.token }}" ]]; then
+          AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
+        fi
+        RELEASE_INFO="$(curl --silent --show-error --fail \
+          --header "$AUTH_HEADER" \
+          --header 'Cache-Control: no-cache, must-revalidate' \
+          'https://api.github.com/repos/stackrox/kube-linter/releases/latest')"
+        echo "version=$(echo "${RELEASE_INFO}" | jq --raw-output ".tag_name")" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve kube-linter version
+      id: resolve-version
+      shell: bash
+      run: |
+        set -u
+        VERSION="${{ steps.fetch-latest-version.outputs.version || inputs.version }}"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "install-dir=$RUNNER_TOOL_CACHE/kube-linter/${VERSION}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore kube-linter from cache
+      id: cache-kube-linter
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.resolve-version.outputs.install-dir }}
+        key: kube-linter-${{ runner.os }}-${{ steps.resolve-version.outputs.version }}
+
     - name: Download kube-linter
+      if: steps.cache-kube-linter.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -u
@@ -42,32 +75,32 @@ runs:
           Windows) OS=windows ;;
           *)       OS=linux ;;
         esac
-        RELEASE_URL='https://api.github.com/repos/stackrox/kube-linter/releases/latest'
-        if [[ "${{ inputs.version }}" != "latest" ]]; then
-          RELEASE_URL='https://api.github.com/repos/stackrox/kube-linter/releases/tags/${{ inputs.version }}'
-        fi
+        INSTALL_DIR="${{ steps.resolve-version.outputs.install-dir }}"
         # Although releases endpoint is available without authentication, the current github.token is still passed
         # in order to increase the limit of 60 requests per hour per IP address to a higher value that's also counted
         # per GitHub account.
         # Caching is disabled in order not to receive stale responses from Varnish cache fronting GitHub API.
         AUTH_HEADER=""
-        if [[ "${{ inputs.token }}" != "" ]]; then
+        if [[ -n "${{ inputs.token }}" ]]; then
           AUTH_HEADER="Authorization: Bearer ${{ inputs.token }}"
         fi
         RELEASE_INFO="$(curl --silent --show-error --fail \
           --header "$AUTH_HEADER" \
           --header 'Cache-Control: no-cache, must-revalidate' \
-          "${RELEASE_URL}")"
-        RELEASE_NAME="$(echo "${RELEASE_INFO}" | jq --raw-output ".name")"
+          "https://api.github.com/repos/stackrox/kube-linter/releases/tags/${{ steps.resolve-version.outputs.version }}")"
         LOCATION="$(echo "${RELEASE_INFO}" \
           | jq --raw-output ".assets[].browser_download_url" \
           | grep --fixed-strings "kube-linter-${OS}.tar.gz")"
-        TARGET="kube-linter-${OS}-${RELEASE_NAME}.tar.gz"
-        # Skip downloading release if downloaded already, e.g. when the action is used multiple times.
-        if [[ ! -e "$TARGET" ]]; then
-          curl --silent --show-error --fail --location --output "$TARGET" "$LOCATION"
-          tar -xf "$TARGET"
-        fi
+        mkdir -p "${INSTALL_DIR}"
+        TMPFILE="$(mktemp)"
+        curl --silent --show-error --fail --location --output "${TMPFILE}" "$LOCATION"
+        tar -xf "${TMPFILE}" -C "${INSTALL_DIR}"
+        rm -f "${TMPFILE}"
+
+    - name: Add kube-linter to PATH
+      shell: bash
+      run: echo "${{ steps.resolve-version.outputs.install-dir }}" >> "$GITHUB_PATH"
+
     - name: Lint files
       shell: bash
       run: |
@@ -84,4 +117,4 @@ runs:
           FLAG_ARGS=""
         fi
 
-        ./kube-linter $CONFIG lint "${{ inputs.directory }}" --format "${{ inputs.format }}" $FLAG_ARGS | tee "${{ inputs.output-file }}"
+        kube-linter $CONFIG lint "${{ inputs.directory }}" --format "${{ inputs.format }}" $FLAG_ARGS | tee "${{ inputs.output-file }}"
